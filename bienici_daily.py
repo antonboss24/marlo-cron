@@ -163,12 +163,21 @@ def psql_run(sql):
     raise RuntimeError("psql: 4 retries pooler KO")
 
 def copy_one(clean_csv, dept):
-    sql = (f"\\COPY public.bienici_annonces ({','.join(OUT_COLS)}) "
-           f"FROM '{clean_csv}' WITH (FORMAT csv, HEADER true, DELIMITER ';', NULL '')")
-    res = subprocess.run([PSQL, DSN, "-c", sql], capture_output=True, text=True, timeout=300)
+    """COPY → table temporaire, puis INSERT ON CONFLICT DO NOTHING.
+    Gère les chevauchements géographiques (une annonce dans plusieurs dépts limitrophes).
+    1 transaction unique, donc rollback total si fail."""
+    tbl = f"staging_bienici_{dept}_{TODAY.replace('-','')}"
+    sql = f"""
+BEGIN;
+CREATE TEMP TABLE {tbl} (LIKE public.bienici_annonces INCLUDING DEFAULTS) ON COMMIT DROP;
+\\COPY {tbl} ({','.join(OUT_COLS)}) FROM '{clean_csv}' WITH (FORMAT csv, HEADER true, DELIMITER ';', NULL '')
+INSERT INTO public.bienici_annonces SELECT * FROM {tbl} ON CONFLICT (id, snapshot_date) DO NOTHING;
+COMMIT;
+"""
+    res = subprocess.run([PSQL, DSN, "-v", "ON_ERROR_STOP=1"], input=sql, capture_output=True, text=True, timeout=300)
     if res.returncode != 0:
         raise RuntimeError(f"COPY dept {dept}: {res.stderr[-400:]}")
-    log(f"  copy dept {dept} ok")
+    log(f"  copy dept {dept} ok (via staging + ON CONFLICT)")
 
 # ─── Main ───────────────────────────────────────────────────────────────────
 def main():
