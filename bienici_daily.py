@@ -25,10 +25,13 @@ WORK          = pathlib.Path(os.environ.get("WORK_DIR", f"/tmp/bienici_routine_{
 WORK.mkdir(exist_ok=True, parents=True)
 
 # DSN : env var d'abord (GitHub Actions secret), fallback ~/.marlo_pg_url (Mac local)
-DSN = (os.environ.get("MARLO_PG_URL")
-       or (pathlib.Path.home() / ".marlo_pg_url").read_text().strip()
-       if (pathlib.Path.home() / ".marlo_pg_url").exists() else None)
-if not DSN: raise SystemExit("DSN absent : set MARLO_PG_URL env var ou ~/.marlo_pg_url")
+DSN = os.environ.get("MARLO_PG_URL")
+if not DSN:
+    local_dsn = pathlib.Path.home() / ".marlo_pg_url"
+    if local_dsn.exists():
+        DSN = local_dsn.read_text().strip()
+if not DSN:
+    raise SystemExit("DSN absent : set MARLO_PG_URL env var ou ~/.marlo_pg_url")
 
 # psql : env var, fallback brew Mac, fallback PATH (Linux)
 def _find_psql():
