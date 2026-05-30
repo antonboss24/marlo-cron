@@ -155,11 +155,11 @@ def prepare(csv_in, dept):
     log(f"  prep dept {dept} ok ({n} lignes)")
     return out_clean, n
 
-def psql_run(sql):
-    """Exécute SQL, retourne stdout strip."""
+def psql_run(sql, timeout=900):
+    """Exécute SQL, retourne stdout strip. Timeout 15 min (gros synth sur 400k+ lignes)."""
     for attempt in range(4):
         res = subprocess.run([PSQL, DSN, "-At", "-c", sql],
-                             capture_output=True, text=True, timeout=300)
+                             capture_output=True, text=True, timeout=timeout)
         if res.returncode == 0:
             return res.stdout.strip()
         if "DbHandler" in res.stderr or "FATAL" in res.stderr:
@@ -206,31 +206,47 @@ def main():
             log(f"  ✗ dept {d}: {e}")
         report['departements'][str(d)] = rep
 
-    # synthèse vs J-1 (toutes les annonces de tous les dépts ingérés aujourd'hui)
+    # synthèse vs J-1 (NOT EXISTS + JOIN explicit = utilise l'index PK efficacement,
+    # 100x plus rapide que NOT IN sur 400k+ lignes). Encapsulé try/except → un fail synth
+    # ne fait pas planter le job (les COPY sont déjà OK).
     log("synth diff J-1…")
     synth_sql = f"""
-      WITH j0 AS (SELECT id, price, commune, title, url_annonce, photo_url
-                  FROM bienici_annonces WHERE snapshot_date = '{TODAY}'),
-           j1 AS (SELECT id, price FROM bienici_annonces WHERE snapshot_date = '{YESTERDAY}'),
-           top_baisses AS (
-             SELECT j0.id, j0.commune, j0.title, (j1.price - j0.price)::int AS delta_eur,
-                    round(100.0 * (j0.price - j1.price) / nullif(j1.price,0), 1) AS delta_pct,
-                    j0.url_annonce
-             FROM j0 JOIN j1 USING (id)
-             WHERE j0.price < j1.price ORDER BY j1.price - j0.price DESC LIMIT 5
-           )
       SELECT json_build_object(
-        'nb_today',     (SELECT count(*) FROM j0),
-        'nb_yesterday', (SELECT count(*) FROM j1),
-        'nb_nouvelles', (SELECT count(*) FROM j0 WHERE id NOT IN (SELECT id FROM j1)),
-        'nb_sorties',   (SELECT count(*) FROM j1 WHERE id NOT IN (SELECT id FROM j0)),
-        'nb_baisses',   (SELECT count(*) FROM j0 a JOIN j1 b USING (id) WHERE a.price < b.price),
-        'nb_hausses',   (SELECT count(*) FROM j0 a JOIN j1 b USING (id) WHERE a.price > b.price),
-        'top_baisses',  coalesce((SELECT json_agg(top_baisses) FROM top_baisses), '[]'::json)
+        'nb_today',     (SELECT count(*) FROM bienici_annonces WHERE snapshot_date = '{TODAY}'),
+        'nb_yesterday', (SELECT count(*) FROM bienici_annonces WHERE snapshot_date = '{YESTERDAY}'),
+        'nb_nouvelles', (SELECT count(*) FROM bienici_annonces a
+                         WHERE a.snapshot_date = '{TODAY}'
+                         AND NOT EXISTS (SELECT 1 FROM bienici_annonces b
+                                         WHERE b.snapshot_date = '{YESTERDAY}' AND b.id = a.id)),
+        'nb_sorties',   (SELECT count(*) FROM bienici_annonces a
+                         WHERE a.snapshot_date = '{YESTERDAY}'
+                         AND NOT EXISTS (SELECT 1 FROM bienici_annonces b
+                                         WHERE b.snapshot_date = '{TODAY}' AND b.id = a.id)),
+        'nb_baisses',   (SELECT count(*) FROM bienici_annonces a
+                         JOIN bienici_annonces b ON b.id = a.id
+                         WHERE a.snapshot_date = '{TODAY}' AND b.snapshot_date = '{YESTERDAY}'
+                         AND a.price < b.price),
+        'nb_hausses',   (SELECT count(*) FROM bienici_annonces a
+                         JOIN bienici_annonces b ON b.id = a.id
+                         WHERE a.snapshot_date = '{TODAY}' AND b.snapshot_date = '{YESTERDAY}'
+                         AND a.price > b.price),
+        'top_baisses',  coalesce((SELECT json_agg(t.*) FROM (
+          SELECT a.id, a.commune, a.title, (b.price - a.price)::int AS delta_eur,
+                 round(100.0 * (a.price - b.price) / nullif(b.price,0), 1) AS delta_pct,
+                 a.url_annonce
+          FROM bienici_annonces a JOIN bienici_annonces b ON b.id = a.id
+          WHERE a.snapshot_date = '{TODAY}' AND b.snapshot_date = '{YESTERDAY}'
+          AND a.price < b.price
+          ORDER BY b.price - a.price DESC LIMIT 5
+        ) t), '[]'::json)
       )::text
     """
-    out = psql_run(synth_sql)
-    report['synth'] = json.loads(out) if out else {}
+    try:
+        out = psql_run(synth_sql, timeout=900)
+        report['synth'] = json.loads(out) if out else {}
+    except Exception as e:
+        log(f"  synth KO (non-bloquant — les COPY sont déjà OK): {e}")
+        report['synth'] = {'error': str(e)[:200]}
 
     print(json.dumps(report, ensure_ascii=False, indent=2))
     # exit 0 si au moins 1 dépt OK, 1 si tous KO
