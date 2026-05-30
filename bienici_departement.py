@@ -69,7 +69,8 @@ for i,c in enumerate(sorted(coms,key=lambda x:-(x.get('population') or 0))):
     if (i+1)%25==0: print(f"  ...{i+1}/{len(coms)} communes — {len(seen)} biens", flush=True)
 
 ads=list(seen.values())
-out=os.path.expanduser(f"~/Desktop/biens_dept_{DEPT}.csv")
+out=os.path.expanduser(os.environ.get("BIENICI_OUT_DIR", "~/Desktop")) + f"/biens_dept_{DEPT}.csv"
+os.makedirs(os.path.dirname(out), exist_ok=True)
 cols=["id","source","propertyType","commune","city","postalCode","insee","price","pricePerSquareMeter",
       "surfaceArea","roomsQuantity","bedroomsQuantity","energyClassification","greenhouseGazClassification",
       "priceHasDecreased","adCreatedByPro","isExclusiveSaleMandate","reference","publicationDate",

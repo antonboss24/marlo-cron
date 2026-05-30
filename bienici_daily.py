@@ -124,12 +124,15 @@ def log(msg):
     print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 def scrape(dept):
-    """Lance le scraper d'Anton. Output attendu : ~/Desktop/biens_dept_{dept}.csv"""
-    out_csv = pathlib.Path.home() / f"Desktop/biens_dept_{dept}.csv"
+    """Lance le scraper. Output : $BIENICI_OUT_DIR/biens_dept_{dept}.csv (default ~/Desktop)."""
+    out_dir = pathlib.Path(os.environ.get("BIENICI_OUT_DIR", str(pathlib.Path.home() / "Desktop")))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = out_dir / f"biens_dept_{dept}.csv"
     if out_csv.exists(): out_csv.unlink()
-    log(f"  scrape dept {dept} …")
+    log(f"  scrape dept {dept} → {out_csv}")
+    env = {**os.environ, "BIENICI_OUT_DIR": str(out_dir)}
     res = subprocess.run([sys.executable, str(SCRAPER), str(dept)],
-                         capture_output=True, text=True, timeout=2400)
+                         capture_output=True, text=True, timeout=2400, env=env)
     if res.returncode != 0:
         raise RuntimeError(f"scrape exit {res.returncode}: {res.stderr[-400:]}")
     if not out_csv.exists():
@@ -171,15 +174,16 @@ def copy_one(clean_csv, dept):
 def main():
     report = {'date': TODAY, 'departements': {}, 'synth': {}}
 
-    # idempotent : on supprime le snapshot du jour avant ré-ingestion (re-run safe)
-    log(f"DELETE bienici_annonces WHERE snapshot_date = {TODAY}")
-    psql_run(f"DELETE FROM bienici_annonces WHERE snapshot_date = '{TODAY}'")
-
     for d in DEPTS:
         rep = {'status': 'pending'}
         try:
             raw = scrape(d)
             clean, n = prepare(raw, d)
+            # idempotent par-dept : on supprime SEULEMENT le snapshot du jour de CE dept,
+            # et SEULEMENT après que le scrape ait réussi → un fail ne perd jamais d'historique.
+            dd = str(d).zfill(2)
+            log(f"  DELETE dept {dd} snapshot {TODAY}")
+            psql_run(f"DELETE FROM bienici_annonces WHERE snapshot_date = '{TODAY}' AND substring(insee, 1, 2) = '{dd}'")
             copy_one(clean, d)
             rep = {'status': 'ok', 'nb_inserted': n}
         except Exception as e:

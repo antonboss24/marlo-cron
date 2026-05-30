@@ -20,4 +20,5 @@ jobs:
         env:
           MARLO_PG_URL: ${{ secrets.MARLO_PG_URL }}
           DEPTS: '49,44'
+          BIENICI_OUT_DIR: ${{ runner.temp }}/bienici
         run: python3 bienici_daily.py
