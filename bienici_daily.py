@@ -18,7 +18,12 @@ Pré-requis  : ~/.marlo_pg_url (DSN pooler) · psql libpq · scraper Anton exist
 import os, sys, subprocess, json, datetime, pathlib, ast, time
 
 # ─── Config (env-aware : marche en local Mac et en GitHub Action Ubuntu) ──
-DEPTS         = [int(x) for x in os.environ.get("DEPTS", "49,44").split(",")]
+def _norm_dept(d):
+    """Normalise un code dépt : '9' → '09', '2A' stays, '971' stays."""
+    d = d.strip()
+    if d.isdigit() and len(d) == 1: return d.zfill(2)
+    return d
+DEPTS         = [_norm_dept(x) for x in os.environ.get("DEPTS", "49,44").split(",") if x.strip()]
 TODAY         = datetime.date.today().isoformat()
 YESTERDAY     = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
 WORK          = pathlib.Path(os.environ.get("WORK_DIR", f"/tmp/bienici_routine_{TODAY}"))
@@ -190,9 +195,10 @@ def main():
             clean, n = prepare(raw, d)
             # idempotent par-dept : on supprime SEULEMENT le snapshot du jour de CE dept,
             # et SEULEMENT après que le scrape ait réussi → un fail ne perd jamais d'historique.
-            dd = str(d).zfill(2)
-            log(f"  DELETE dept {dd} snapshot {TODAY}")
-            psql_run(f"DELETE FROM bienici_annonces WHERE snapshot_date = '{TODAY}' AND substring(insee, 1, 2) = '{dd}'")
+            # Le préfixe insee = len(d) chars (2 pour métropole, 3 pour DOM 971-976).
+            n_pref = len(d)
+            log(f"  DELETE dept {d} snapshot {TODAY} (prefix {n_pref} chars)")
+            psql_run(f"DELETE FROM bienici_annonces WHERE snapshot_date = '{TODAY}' AND substring(insee, 1, {n_pref}) = '{d}'")
             copy_one(clean, d)
             rep = {'status': 'ok', 'nb_inserted': n}
         except Exception as e:
