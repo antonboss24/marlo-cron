@@ -13,11 +13,9 @@ jobs:
       max-parallel: 5      # France entière en 5 batches parallèles → ~1h wall time au total
       matrix:
         batch:
-          # RECOVER : 28 dépts manquants du run précédent (cancelled cascade).
-          # Découpés en 3 batches équilibrés. Restaurer la matrix full France après ce run.
-          - { name: 'recover-1', depts: '18,19,2A,32,33,34,35,36,37,38' }
-          - { name: 'recover-2', depts: '39,56,57,58,59,67,68,69,70,71' }
-          - { name: 'recover-3', depts: '72,73,74,75,76,77,78,79' }
+          # TEST EXHAUSTIVITÉ : un seul dépt (75 Paris) pour mesurer le gain avec 14 slices vs 5.
+          # Restaurer la matrix full France une fois le gain confirmé (cible 60k Paris vs 7,8k actuel).
+          - { name: 'test-paris', depts: '75' }
     name: ${{ matrix.batch.name }}
     steps:
       - uses: actions/checkout@v4

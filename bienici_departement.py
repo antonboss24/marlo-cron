@@ -9,7 +9,7 @@ import sys, json, urllib.request, urllib.parse, time, csv, os, collections, stat
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 DEPT = (sys.argv[1] if len(sys.argv) > 1 else "49")
 PROP = ["house","flat","loft","townhouse","castle","manor","terrain","building","premises","parking"]
-SLICES = [(0,120000),(120000,200000),(200000,300000),(300000,500000),(500000,None)]
+SLICES = [(0,50000),(50000,100000),(100000,150000),(150000,200000),(200000,250000),(250000,300000),(300000,400000),(400000,500000),(500000,700000),(700000,1000000),(1000000,1500000),(1500000,2500000),(2500000,5000000),(5000000,None)]
 
 def get_json(url, tries=3):
     for i in range(tries):
