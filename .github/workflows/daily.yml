@@ -13,9 +13,14 @@ jobs:
       max-parallel: 5      # France entière en 5 batches parallèles → ~1h wall time au total
       matrix:
         batch:
-          # TEST EXHAUSTIVITÉ : un seul dépt (75 Paris) pour mesurer le gain avec 14 slices vs 5.
-          # Restaurer la matrix full France une fois le gain confirmé (cible 60k Paris vs 7,8k actuel).
-          - { name: 'test-paris', depts: '75' }
+          # France entière avec 14 slices fines.
+          # NB : Paris/Lyon/Marseille restent sous-représentés (cap par commune unique 75056/69123/13055).
+          # Patch arrondissements à venir dans bienici_departement.py.
+          - { name: 'batch-1', depts: '01,02,03,04,05,06,07,08,09,10,11,12,13,14,15,16,17,18,19,2A' }
+          - { name: 'batch-2', depts: '2B,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39' }
+          - { name: 'batch-3', depts: '40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59' }
+          - { name: 'batch-4', depts: '60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79' }
+          - { name: 'batch-5', depts: '80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,971,972,973,974,976' }
     name: ${{ matrix.batch.name }}
     steps:
       - uses: actions/checkout@v4
