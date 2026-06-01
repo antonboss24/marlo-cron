@@ -36,13 +36,26 @@ def zone_for(nom, cp, expected_insee=None):
             if it.get("type")==t and it.get("zoneIds"): return it["zoneIds"]
     return items[0]["zoneIds"] if items and items[0].get("zoneIds") else None
 
-def search(zoneIds, pmin=None, pmax=None):
+# Filtres par nombre de pièces (2e dimension de découpage pour communes ultra-denses).
+# Bien'ici filtre par minRooms/maxRooms. T1=1, T2=2, T3=3, T4=4, T5+ = ≥5, "0" = sans pièce (terrain/parking/local).
+ROOM_FILTERS = [
+    (1, 1),    # T1
+    (2, 2),    # T2
+    (3, 3),    # T3
+    (4, 4),    # T4
+    (5, None), # T5+
+    (0, 0),    # sans pièce déclarée (terrain, parking, etc.)
+]
+
+def search(zoneIds, pmin=None, pmax=None, rmin=None, rmax=None):
     out=[]; page=1
     while True:
         f={"size":100,"from":(page-1)*100,"filterType":"buy","propertyType":PROP,"page":page,
            "resultsPerPage":100,"maxAuthorizedResults":2400,"onTheMarket":[True],"zoneIdsByTypes":{"zoneIds":zoneIds}}
         if pmin is not None: f["minPrice"]=pmin
         if pmax is not None: f["maxPrice"]=pmax
+        if rmin is not None: f["minRooms"]=rmin
+        if rmax is not None: f["maxRooms"]=rmax
         d=get_json("https://www.bienici.com/realEstateAds.json?filters="+urllib.parse.quote(json.dumps(f)))
         ads=d.get("realEstateAds",[]); total=d.get("total",0); out+=ads
         if len(out)>=min(total,2400) or not ads or page>=24: break
@@ -50,22 +63,55 @@ def search(zoneIds, pmin=None, pmax=None):
     return out, total
 
 def collect(zoneIds):
-    """Récupère TOUTES les annonces d'une zone, exhaustif même sur les communes très denses.
-    1) 1 requête globale → si total ≤ 2400 c'est OK.
-    2) Sinon : split par SLICES de prix.
-    3) Si une SLICE retourne encore ≥ 2400 (commune très dense), binary split récursif jusqu'à
-       descendre sous le cap. Garantit l'exhaustivité pour Bordeaux/Lille/Nantes/Nice/Strasbourg/Toulouse
-       (communes denses sans arrondissements) et tout cas futur similaire."""
+    """Récupère TOUTES les annonces d'une zone, exhaustif même sur les communes ultra-denses.
+    Stratégie en cascade :
+      1) 1 requête globale → si total ≤ 2400 c'est OK, on s'arrête.
+      2) Découpage par prix (5 SLICES). Si une slice ≤ 2400, on prend tel quel.
+      3) Si une slice cape (>2400), 2e dimension : découpage par nombre de pièces (T1/T2/T3/T4/T5+/sans).
+         5 slices × 6 segments pièces = 30 combinaisons par commune, cap effectif 30×2400 = 72 000.
+      4) Si UNE COMBINAISON cape encore (>2400, extrêmement rare sur Bien'ici filterType=buy),
+         binary split sur le prix dans cette combinaison.
+    """
     ads, total = search(zoneIds)
     if total <= 2400:
         return ads
-    # Stack de slices à explorer
     ads = []
     stack = list(SLICES)
     while stack:
         pmin, pmax = stack.pop(0)
         seg, seg_total = search(zoneIds, pmin, pmax)
-        # Binary split : si la slice cape ET le range est suffisamment grand pour être splitté
+        if seg_total <= 2400:
+            ads += seg
+            time.sleep(0.3)
+            continue
+        # Slice prix cape : 2e dim — découpage par nombre de pièces
+        for rmin, rmax in ROOM_FILTERS:
+            sub_seg, sub_total = search(zoneIds, pmin, pmax, rmin=rmin, rmax=rmax)
+            if sub_total <= 2400:
+                ads += sub_seg
+                time.sleep(0.3)
+                continue
+            # Cas extrême : combinaison (prix × pièces) cape encore → binary split sur prix
+            if pmax is not None and (pmax - pmin) >= 10000:
+                mid = pmin + (pmax - pmin) // 2
+                seg_a, _ = search(zoneIds, pmin, mid, rmin=rmin, rmax=rmax)
+                seg_b, _ = search(zoneIds, mid, pmax, rmin=rmin, rmax=rmax)
+                ads += seg_a + seg_b
+            else:
+                ads += sub_seg
+            time.sleep(0.3)
+    return ads
+
+# Ancienne logique binary split (gardée commentée pour référence, remplacée par la cascade ci-dessus)
+def _legacy_collect_unused(zoneIds):
+    ads, total = search(zoneIds)
+    if total <= 2400:
+        return ads
+    ads = []
+    stack = list(SLICES)
+    while stack:
+        pmin, pmax = stack.pop(0)
+        seg, seg_total = search(zoneIds, pmin, pmax)
         if seg_total > 2400 and pmax is not None and (pmax - pmin) >= 10000:
             mid = pmin + (pmax - pmin) // 2
             stack.insert(0, (pmin, mid))

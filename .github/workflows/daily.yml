@@ -10,10 +10,13 @@ jobs:
       max-parallel: 2      # PRUDENCE : 2 batches max simultanés pour pas saturer le pooler Supabase d'Anton (sa prod tourne dessus). Wall time ~2h30, ta prod reste fluide.
       matrix:
         batch:
-          # MODE RECOVER : seulement les 30 dépts manquants du snapshot 01/06 (cancellés hier).
-          # À remettre en France entière (5 batches) dès que le snapshot 01/06 est complet.
-          - { name: 'recover-A', depts: '04,14,17,18,19,22,2A,32,33,34,35,36,37,38,39' }
-          - { name: 'recover-B', depts: '53,55,56,57,58,59,72,73,74,75,76,77,78,79,91' }
+          # France entière — 5 batches × max-parallel 2 → 2 batches simultanés, wall time ~2h30
+          # Code : 5 slices prix × 6 segments pièces = 30 combinaisons/commune (cap 72k/commune)
+          - { name: 'batch-1', depts: '01,02,03,04,05,06,07,08,09,10,11,12,13,14,15,16,17,18,19,2A' }
+          - { name: 'batch-2', depts: '2B,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39' }
+          - { name: 'batch-3', depts: '40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59' }
+          - { name: 'batch-4', depts: '60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79' }
+          - { name: 'batch-5', depts: '80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,971,972,973,974,976' }
     name: ${{ matrix.batch.name }}
     steps:
       - uses: actions/checkout@v4
