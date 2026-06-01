@@ -9,7 +9,7 @@ import sys, json, urllib.request, urllib.parse, time, csv, os, collections, stat
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 DEPT = (sys.argv[1] if len(sys.argv) > 1 else "49")
 PROP = ["house","flat","loft","townhouse","castle","manor","terrain","building","premises","parking"]
-SLICES = [(0,50000),(50000,100000),(100000,150000),(150000,200000),(200000,250000),(250000,300000),(300000,400000),(400000,500000),(500000,700000),(700000,1000000),(1000000,1500000),(1500000,2500000),(2500000,5000000),(5000000,None)]
+SLICES = [(0,120000),(120000,200000),(200000,300000),(300000,500000),(500000,None)]
 
 def get_json(url, tries=3):
     for i in range(tries):
@@ -21,9 +21,16 @@ def get_json(url, tries=3):
             if i == tries-1: raise
             time.sleep(1.5)
 
-def zone_for(nom, cp):
+def zone_for(nom, cp, expected_insee=None):
     items = get_json("https://res.bienici.com/suggest.json?q=" + urllib.parse.quote(f"{nom} {cp}"))
     items = items if isinstance(items, list) else []
+    # 1) MATCH STRICT par INSEE (fix homonymes : Saint-Martin du 53 vs 38 vs 13…).
+    #    Bien'ici expose insee_code (singulier) et insee_codes (pluriel pour postalCode/zone).
+    if expected_insee:
+        for it in items:
+            if it.get("insee_code") == expected_insee or expected_insee in (it.get("insee_codes") or []):
+                if it.get("zoneIds"): return it["zoneIds"]
+    # 2) Fallback par type (cas rares où l'INSEE n'apparaît pas).
     for t in ("city","town","delegated-city","arrondissement"):
         for it in items:
             if it.get("type")==t and it.get("zoneIds"): return it["zoneIds"]
@@ -43,20 +50,66 @@ def search(zoneIds, pmin=None, pmax=None):
     return out, total
 
 def collect(zoneIds):
-    ads,total=search(zoneIds)
-    if total>2400:
-        ads=[]
-        for pmin,pmax in SLICES:
-            seg,_=search(zoneIds,pmin,pmax); ads+=seg; time.sleep(0.3)
+    """Récupère TOUTES les annonces d'une zone, exhaustif même sur les communes très denses.
+    1) 1 requête globale → si total ≤ 2400 c'est OK.
+    2) Sinon : split par SLICES de prix.
+    3) Si une SLICE retourne encore ≥ 2400 (commune très dense), binary split récursif jusqu'à
+       descendre sous le cap. Garantit l'exhaustivité pour Bordeaux/Lille/Nantes/Nice/Strasbourg/Toulouse
+       (communes denses sans arrondissements) et tout cas futur similaire."""
+    ads, total = search(zoneIds)
+    if total <= 2400:
+        return ads
+    # Stack de slices à explorer
+    ads = []
+    stack = list(SLICES)
+    while stack:
+        pmin, pmax = stack.pop(0)
+        seg, seg_total = search(zoneIds, pmin, pmax)
+        # Binary split : si la slice cape ET le range est suffisamment grand pour être splitté
+        if seg_total > 2400 and pmax is not None and (pmax - pmin) >= 10000:
+            mid = pmin + (pmax - pmin) // 2
+            stack.insert(0, (pmin, mid))
+            stack.insert(1, (mid, pmax))
+        elif seg_total > 2400 and pmax is None:
+            # tranche 500k+ : split en 500k-1M, 1M-2M, 2M-5M, 5M+
+            stack.insert(0, (pmin, 1000000))
+            stack.insert(1, (1000000, 2000000))
+            stack.insert(2, (2000000, 5000000))
+            stack.insert(3, (5000000, None))
+        else:
+            ads += seg
+        time.sleep(0.3)
     return ads
 
 coms=get_json(f"https://geo.api.gouv.fr/departements/{DEPT}/communes?fields=nom,code,codesPostaux,population&format=json")
+
+# Paris/Lyon/Marseille = 1 seule commune INSEE (75056/69123/13055) → cap 5×2400=12k.
+# Explose en arrondissements. CRITIQUE : utilise le VRAI INSEE de l'arrondissement (75101…),
+# pas celui de la commune mère (75056), pour que le match strict INSEE dans zone_for
+# trouve l'arrondissement et pas Paris entier (cf. type "city" qui aurait gagné sinon).
+if DEPT in ("75", "69", "13"):
+    ARR = {
+        "75056": [(f"Paris {i}{'er' if i==1 else 'e'}", f"750{i:02d}", f"751{i:02d}") for i in range(1,21)],
+        "69123": [(f"Lyon {i}{'er' if i==1 else 'e'}", f"6900{i}",      f"6938{i}")   for i in range(1,10)],
+        "13055": [(f"Marseille {i}{'er' if i==1 else 'e'}", f"130{i:02d}", f"132{i:02d}") for i in range(1,17)],
+    }
+    new_coms = []
+    for c in coms:
+        if c.get("code") in ARR:
+            for nom, cp, arr_insee in ARR[c["code"]]:
+                # Le 'code' devient le VRAI INSEE de l'arr → zone_for match strict trouve l'arr.
+                new_coms.append({"nom": nom, "code": arr_insee, "codesPostaux": [cp], "population": 30000})
+        else:
+            new_coms.append(c)
+    coms = new_coms
+    print(f"  → patch arrondissements actif sur DEPT {DEPT} ({len(coms)} entrées)", flush=True)
+
 print(f"{len(coms)} communes dans le {DEPT}", flush=True)
 seen={}; vides=0
 for i,c in enumerate(sorted(coms,key=lambda x:-(x.get('population') or 0))):
     cp=(c.get("codesPostaux") or [""])[0]
     try:
-        z=zone_for(c["nom"], cp)
+        z=zone_for(c["nom"], cp, expected_insee=c.get("code"))
         if not z: vides+=1; continue
         kept=0
         for a in collect(z):
