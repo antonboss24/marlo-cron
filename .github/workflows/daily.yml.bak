@@ -7,7 +7,7 @@ on:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 350    # 1h30 par batch (les gros dépts 75/13/06/44 + ~17 autres)
+    timeout-minutes: 90    # 1h30 par batch (les gros dépts 75/13/06/44 + ~17 autres)
     strategy:
       fail-fast: false     # un batch KO n'arrête pas les autres
       max-parallel: 5      # France entière en 5 batches parallèles → ~1h wall time au total
